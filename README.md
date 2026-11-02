@@ -11,7 +11,7 @@ Production-ready microservice architecture built with **Spring Boot 3**, **Sprin
                                                   │
                                                   ▼
                                      ┌─────────────────────────┐
-                                     │  Spring Cloud Gateway   │  (Port: 8080)
+                                     │  Spring Cloud Gateway   │  (Port: 1020)
                                      │  (RateLimit/Circuit/MDC)│
                                      └────────────┬────────────┘
                                                   │
@@ -101,7 +101,7 @@ Production-ready microservice architecture built with **Spring Boot 3**, **Sprin
 ## 🚀 Getting Started
 
 ### Prerequisites
-- **JDK 17** or higher
+- **JDK 25** or higher
 - **Maven 3.8+**
 - **Docker & Docker Compose**
 
@@ -196,7 +196,7 @@ curl http://localhost:8080/api/v1/orders/1 \
 ## 📊 Dashboards & Interfaces
 
 - **Eureka Registry**: [http://localhost:8761](http://localhost:8761)
-- **API Gateway**: [http://localhost:8080](http://localhost:8080)
+- **API Gateway**: [http://localhost:1020](http://localhost:1020)
 - **Customer Swagger**: [http://localhost:8081/swagger-ui.html](http://localhost:8081/swagger-ui.html)
 - **Product Swagger**: [http://localhost:8082/swagger-ui.html](http://localhost:8082/swagger-ui.html)
 - **Order Swagger**: [http://localhost:8083/swagger-ui.html](http://localhost:8083/swagger-ui.html)
