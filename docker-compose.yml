@@ -1,0 +1,291 @@
+version: '3.8'
+
+networks:
+  microservices-net:
+    driver: bridge
+
+volumes:
+  elasticsearch-data:
+  postgres-data:
+  prometheus-data:
+  grafana-data:
+
+services:
+  # ========================================================
+  # Observability: ELK Stack (Elasticsearch, Logstash, Kibana)
+  # ========================================================
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - microservices-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q 'status'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.11.0
+    container_name: logstash
+    volumes:
+      - ./monitoring/elk/logstash/pipeline/logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro
+      - ./monitoring/elk/logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+    ports:
+      - "5000:5000"
+    environment:
+      - "LS_JAVA_OPTS=-Xms256m -Xmx256m"
+    networks:
+      - microservices-net
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    container_name: kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+    networks:
+      - microservices-net
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+  # ========================================================
+  # Observability: Prometheus & Grafana Monitoring
+  # ========================================================
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: prometheus
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - microservices-net
+
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - microservices-net
+    depends_on:
+      - prometheus
+
+  # ========================================================
+  # Distributed Tracing (Zipkin)
+  # ========================================================
+  zipkin:
+    image: openzipkin/zipkin:2.24
+    container_name: zipkin
+    ports:
+      - "9411:9411"
+    networks:
+      - microservices-net
+
+  # ========================================================
+  # Database: PostgreSQL
+  # ========================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=microservices
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - microservices-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ========================================================
+  # Service Discovery: Eureka Server
+  # ========================================================
+  eureka-server:
+    build:
+      context: ./eureka-server
+    container_name: eureka-server
+    ports:
+      - "8761:8761"
+    environment:
+      - LOGSTASH_HOST=logstash
+      - LOGSTASH_PORT=5000
+      - SPRING_PROFILES_ACTIVE=docker
+    networks:
+      - microservices-net
+    depends_on:
+      - logstash
+
+  # ========================================================
+  # Spring Cloud API Gateway
+  # ========================================================
+  api-gateway:
+    build:
+      context: ./api-gateway
+    container_name: api-gateway
+    ports:
+      - "1020:1020"
+    environment:
+      - EUREKA_HOST=eureka-server
+      - LOGSTASH_HOST=logstash
+      - LOGSTASH_PORT=5000
+      - SPRING_PROFILES_ACTIVE=docker
+    networks:
+      - microservices-net
+    depends_on:
+      - eureka-server
+      - logstash
+
+  # ========================================================
+  # Microservice: Customer Service
+  # ========================================================
+  customer-service:
+    build:
+      context: ./customer-service
+    container_name: customer-service
+    ports:
+      - "8081:8081"
+    environment:
+      - EUREKA_HOST=eureka-server
+      - LOGSTASH_HOST=logstash
+      - LOGSTASH_PORT=5000
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/microservices
+      - SPRING_DATASOURCE_DRIVER_CLASS_NAME=org.postgresql.Driver
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=postgres
+      - SPRING_JPA_DATABASE_PLATFORM=org.hibernate.dialect.PostgreSQLDialect
+    networks:
+      - microservices-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      eureka-server:
+        condition: service_started
+      logstash:
+        condition: service_started
+
+  # ========================================================
+  # Microservice: Product Service
+  # ========================================================
+  product-service:
+    build:
+      context: ./product-service
+    container_name: product-service
+    ports:
+      - "8082:8082"
+    environment:
+      - EUREKA_HOST=eureka-server
+      - LOGSTASH_HOST=logstash
+      - LOGSTASH_PORT=5000
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/microservices
+      - SPRING_DATASOURCE_DRIVER_CLASS_NAME=org.postgresql.Driver
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=postgres
+      - SPRING_JPA_DATABASE_PLATFORM=org.hibernate.dialect.PostgreSQLDialect
+    networks:
+      - microservices-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      eureka-server:
+        condition: service_started
+      logstash:
+        condition: service_started
+
+  # ========================================================
+  # Microservice: Payment Service
+  # ========================================================
+  payment-service:
+    build:
+      context: ./payment-service
+    container_name: payment-service
+    ports:
+      - "8084:8084"
+    environment:
+      - EUREKA_HOST=eureka-server
+      - LOGSTASH_HOST=logstash
+      - LOGSTASH_PORT=5000
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/microservices
+      - SPRING_DATASOURCE_DRIVER_CLASS_NAME=org.postgresql.Driver
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=postgres
+      - SPRING_JPA_DATABASE_PLATFORM=org.hibernate.dialect.PostgreSQLDialect
+    networks:
+      - microservices-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      eureka-server:
+        condition: service_started
+      customer-service:
+        condition: service_started
+      logstash:
+        condition: service_started
+
+  # ========================================================
+  # Microservice: Order Service (Orchestrator)
+  # ========================================================
+  order-service:
+    build:
+      context: ./order-service
+    container_name: order-service
+    ports:
+      - "8083:8083"
+    environment:
+      - EUREKA_HOST=eureka-server
+      - LOGSTASH_HOST=logstash
+      - LOGSTASH_PORT=5000
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/microservices
+      - SPRING_DATASOURCE_DRIVER_CLASS_NAME=org.postgresql.Driver
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=postgres
+      - SPRING_JPA_DATABASE_PLATFORM=org.hibernate.dialect.PostgreSQLDialect
+    networks:
+      - microservices-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      eureka-server:
+        condition: service_started
+      customer-service:
+        condition: service_started
+      product-service:
+        condition: service_started
+      payment-service:
+        condition: service_started
+      logstash:
+        condition: service_started

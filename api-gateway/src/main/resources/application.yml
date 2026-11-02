@@ -1,0 +1,121 @@
+server:
+  port: 1020
+
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      discovery:
+        locator:
+          enabled: true
+          lower-case-service-id: true
+      routes:
+        - id: customer-service
+          uri: lb://customer-service
+          predicates:
+            - Path=/api/v1/customers/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: customerCircuitBreaker
+                fallbackUri: forward:/fallback/customers
+
+        - id: product-service
+          uri: lb://product-service
+          predicates:
+            - Path=/api/v1/products/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: productCircuitBreaker
+                fallbackUri: forward:/fallback/products
+
+        - id: order-service
+          uri: lb://order-service
+          predicates:
+            - Path=/api/v1/orders/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: orderCircuitBreaker
+                fallbackUri: forward:/fallback/orders
+
+        - id: payment-service
+          uri: lb://payment-service
+          predicates:
+            - Path=/api/v1/payments/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: paymentCircuitBreaker
+                fallbackUri: forward:/fallback/payments
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://${EUREKA_HOST:localhost}:8761/eureka/
+    fetch-registry: true
+    register-with-eureka: true
+  instance:
+    prefer-ip-address: true
+    instance-id: ${spring.application.name}:${random.value}
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      customerCircuitBreaker:
+        sliding-window-size: 10
+        permitted-number-of-calls-in-half-open-state: 3
+        sliding-window-type: COUNT_BASED
+        minimum-number-of-calls: 5
+        wait-duration-in-open-state: 5s
+        failure-rate-threshold: 50
+      productCircuitBreaker:
+        sliding-window-size: 10
+        permitted-number-of-calls-in-half-open-state: 3
+        wait-duration-in-open-state: 5s
+        failure-rate-threshold: 50
+      orderCircuitBreaker:
+        sliding-window-size: 10
+        permitted-number-of-calls-in-half-open-state: 3
+        wait-duration-in-open-state: 5s
+        failure-rate-threshold: 50
+      paymentCircuitBreaker:
+        sliding-window-size: 10
+        permitted-number-of-calls-in-half-open-state: 3
+        wait-duration-in-open-state: 5s
+        failure-rate-threshold: 50
+  timelimiter:
+    instances:
+      customerCircuitBreaker:
+        timeout-duration: 4s
+      productCircuitBreaker:
+        timeout-duration: 4s
+      orderCircuitBreaker:
+        timeout-duration: 5s
+      paymentCircuitBreaker:
+        timeout-duration: 4s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,gateway
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+    gateway:
+      enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+      environment: ${SPRING_PROFILES_ACTIVE:local}
+  tracing:
+    sampling:
+      probability: 1.0
+
+logging:
+  config: classpath:logback-spring.xml
